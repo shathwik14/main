@@ -107,6 +107,6 @@ def predict_score(data: CreditRequest):
     final_score = max(0, min(500, base_score + delta))
 
     return {
-        "final_socre": round(float(final_score), 2),
+        "final_score": round(float(final_score), 2),
         "repayment_percent": round(float(repayment), 2),
     }
