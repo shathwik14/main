@@ -6,6 +6,7 @@ import pandas as pd
 import os
 from dotenv import load_dotenv
 import openai
+from typing import Optional
 
 load_dotenv()
 
@@ -33,9 +34,8 @@ class CreditRequest(BaseModel):
     family_dependents: int
     district: str
     monthly_income: int
-    credit_score: int
+    credit_score: Optional[int] = 0
     bank_statement_text: str
-
 
 def get_repayment_percentage(income, job_stability, dependents, credit_score):
     income_score = min(income / 100000, 1.0)
