@@ -1,22 +1,25 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from typing import Optional
 import joblib
 import pandas as pd
 import os
 from dotenv import load_dotenv
 import openai
-from typing import Optional
 
+# Load environment variables
 load_dotenv()
-
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-model = joblib.load("telangana_xgboost_model.pkl")
+# Load the trained XGBoost model
+model = joblib.load("xgb_model_repayment_score.pkl")
+EXPECTED_COLUMNS = list(model.feature_names_in_)
 
+# Initialize FastAPI app
 app = FastAPI()
 
-
+# Enable CORS (allow access from any frontend)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -25,38 +28,35 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
+# Input schema
 class CreditRequest(BaseModel):
-    age: int
-    education_level: str
     employment_type: str
-    job_stability: float
+    education_level: str
+    job_stability_years: float
     family_dependents: int
-    district: str
     monthly_income: int
-    credit_score: Optional[int] = 0
+    district: str
+    house_ownership_status: str
+    vehicle_ownership: str
+    active_bank_accounts: int
+    average_monthly_expenses: int
+    existing_emi_burden: int
+    emergency_savings_availability: str
+    utility_bill_payment_regularity: str
     bank_statement_text: str
 
-def get_repayment_percentage(income, job_stability, dependents, credit_score):
+# Simple rule-based repayment % function
+def get_repayment_percentage(income, job_stability, dependents):
     income_score = min(income / 100000, 1.0)
     stability_score = min(job_stability / 20, 1.0)
     dependents_score = max(1 - (dependents / 6), 0)
-    credit_score_norm = credit_score / 850 if credit_score > 0 else 0
     repayment_percent = (
-        income_score * 0.4
-        + stability_score * 0.2
-        + dependents_score * 0.2
-        + credit_score_norm * 0.2
+        income_score * 0.5 + stability_score * 0.3 + dependents_score * 0.2
     ) * 100
     return round(repayment_percent, 2)
 
-
+# LLM for analyzing bank statement text
 def talk_with_llm(text: str) -> int:
-    """
-    Uses OpenAI GPT to analyze bank statement text.
-    Returns a score adjustment from -10 to +10.
-    """
-
     prompt = f"""
 You are a finance expert. Analyze this bank statement:
 \"\"\"{text}\"\"\"
@@ -64,49 +64,61 @@ You are a finance expert. Analyze this bank statement:
 Based on this, suggest a credit score adjustment:
 Return a single number between -10 and +10 (no text, just the number).
 """
-
     try:
         response = openai.ChatCompletion.create(
             model="gpt-4o-mini",
             messages=[
-                {
-                    "role": "system",
-                    "content": "You are a helpful assistant for loan analysis.",
-                },
+                {"role": "system", "content": "You are a helpful assistant for loan analysis."},
                 {"role": "user", "content": prompt},
             ],
             temperature=0.3,
         )
-
         output = response["choices"][0]["message"]["content"]
         return max(-10, min(10, int(output.strip())))
-
     except Exception as e:
         print("❌ GPT Error:", e)
         return 0
 
+# Health check
+@app.get("/health")
+def health():
+    return {"status": "ok"}
 
+# Prediction endpoint
 @app.post("/predict")
 def predict_score(data: CreditRequest):
     input_data = data.dict()
-
-    repayment = get_repayment_percentage(
-        input_data["monthly_income"],
-        input_data["job_stability"],
-        input_data["family_dependents"],
-        input_data["credit_score"],
-    )
-
-    input_data["repayment_capacity_percent"] = repayment
     bank_text = input_data.pop("bank_statement_text")
 
-    input_df = pd.DataFrame([input_data])
-    base_score = model.predict(input_df)[0]
+    # Add repayment % estimate
+    repayment = get_repayment_percentage(
+        input_data["monthly_income"],
+        input_data["job_stability_years"],
+        input_data["family_dependents"],
+    )
+    input_data["repayment_capacity_percent"] = repayment
 
+    # Create dataframe
+    input_df = pd.DataFrame([input_data])
+
+    # One-hot encode
+    input_df_encoded = pd.get_dummies(input_df)
+
+    # Ensure column alignment with training
+    for col in EXPECTED_COLUMNS:
+        if col not in input_df_encoded:
+            input_df_encoded[col] = 0
+    input_df_encoded = input_df_encoded[EXPECTED_COLUMNS]
+
+    # Predict base score
+    base_score = model.predict(input_df_encoded)[0]
+
+    # LLM Adjustment
     delta = talk_with_llm(bank_text)
     final_score = max(0, min(500, base_score + delta))
 
     return {
         "final_score": round(float(final_score), 2),
-        "repayment_percent": round(float(repayment), 2),
+        "repayment_percent": repayment,
+        "llm_adjustment": delta,
     }
