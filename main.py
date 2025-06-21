@@ -8,18 +8,14 @@ import os
 from dotenv import load_dotenv
 import openai
 
-# Load environment variables
 load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-# Load the trained XGBoost model
 model = joblib.load("xgb_model_repayment_score.pkl")
 EXPECTED_COLUMNS = list(model.feature_names_in_)
 
-# Initialize FastAPI app
 app = FastAPI()
 
-# Enable CORS (allow access from any frontend)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -28,7 +24,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Input schema
 class CreditRequest(BaseModel):
     employment_type: str
     education_level: str
@@ -45,7 +40,6 @@ class CreditRequest(BaseModel):
     utility_bill_payment_regularity: str
     bank_statement_text: str
 
-# Simple rule-based repayment % function
 def get_repayment_percentage(income, job_stability, dependents):
     income_score = min(income / 100000, 1.0)
     stability_score = min(job_stability / 20, 1.0)
@@ -55,7 +49,6 @@ def get_repayment_percentage(income, job_stability, dependents):
     ) * 100
     return round(repayment_percent, 2)
 
-# LLM for analyzing bank statement text
 def talk_with_llm(text: str) -> int:
     prompt = f"""
 You are a finance expert. Analyze this bank statement:
@@ -79,41 +72,21 @@ Return a single number between -10 and +10 (no text, just the number).
         print("❌ GPT Error:", e)
         return 0
 
-# Health check
-@app.get("/health")
-def health():
-    return {"status": "ok"}
-
-# Prediction endpoint
 @app.post("/predict")
 def predict_score(data: CreditRequest):
     input_data = data.dict()
     bank_text = input_data.pop("bank_statement_text")
 
-    # Add repayment % estimate
     repayment = get_repayment_percentage(
         input_data["monthly_income"],
         input_data["job_stability_years"],
         input_data["family_dependents"],
     )
-    input_data["repayment_capacity_percent"] = repayment
+    input_data["repayment_percent"] = repayment
 
-    # Create dataframe
     input_df = pd.DataFrame([input_data])
+    base_score = model.predict(input_df)[0]
 
-    # One-hot encode
-    input_df_encoded = pd.get_dummies(input_df)
-
-    # Ensure column alignment with training
-    for col in EXPECTED_COLUMNS:
-        if col not in input_df_encoded:
-            input_df_encoded[col] = 0
-    input_df_encoded = input_df_encoded[EXPECTED_COLUMNS]
-
-    # Predict base score
-    base_score = model.predict(input_df_encoded)[0]
-
-    # LLM Adjustment
     delta = talk_with_llm(bank_text)
     final_score = max(0, min(500, base_score + delta))
 
