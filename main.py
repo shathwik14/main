@@ -11,7 +11,7 @@ import openai
 load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-model = joblib.load("xgb_model_repayment_score.pkl")
+model = joblib.load("xgb_model_repayment_score_v2.pkl")
 EXPECTED_COLUMNS = list(model.feature_names_in_)
 
 app = FastAPI()
@@ -23,6 +23,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 class CreditRequest(BaseModel):
     employment_type: str
@@ -40,6 +41,7 @@ class CreditRequest(BaseModel):
     utility_bill_payment_regularity: str
     bank_statement_text: str
 
+
 def get_repayment_percentage(income, job_stability, dependents):
     income_score = min(income / 100000, 1.0)
     stability_score = min(job_stability / 20, 1.0)
@@ -48,6 +50,7 @@ def get_repayment_percentage(income, job_stability, dependents):
         income_score * 0.5 + stability_score * 0.3 + dependents_score * 0.2
     ) * 100
     return round(repayment_percent, 2)
+
 
 def talk_with_llm(text: str) -> int:
     prompt = f"""
@@ -61,7 +64,10 @@ Return a single number between -10 and +10 (no text, just the number).
         response = openai.ChatCompletion.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "You are a helpful assistant for loan analysis."},
+                {
+                    "role": "system",
+                    "content": "You are a helpful assistant for loan analysis.",
+                },
                 {"role": "user", "content": prompt},
             ],
             temperature=0.3,
@@ -71,6 +77,7 @@ Return a single number between -10 and +10 (no text, just the number).
     except Exception as e:
         print("❌ GPT Error:", e)
         return 0
+
 
 @app.post("/predict")
 def predict_score(data: CreditRequest):
