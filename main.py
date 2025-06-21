@@ -93,5 +93,4 @@ def predict_score(data: CreditRequest):
     return {
         "final_score": round(float(final_score), 2),
         "repayment_percent": repayment,
-        "llm_adjustment": delta,
     }
